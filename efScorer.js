@@ -1,16 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const axios = require("axios");
-require("dotenv").config();
-
-const API_URL = process.env.API_URL;
-const MODEL_NAME = process.env.MODEL_NAME;
-
-if (!API_URL || !MODEL_NAME) {
-	console.error("❌ Missing API_URL or MODEL_NAME in .env file. Please set them before running.");
-	process.exit(1);
-}
-const { logAPIInteraction } = require("./logger");
+const { callLLM } = require("./llm");
 
 /**
  * Cleans an SRT file by removing timestamps, line numbers, and audio tags.
@@ -104,6 +94,7 @@ async function scoreExpectationFormation(videoId, srtPath, descPath, icScores) {
     Match this schema exactly (filling scores with integers 0-100):
     {
       "videoId": "${videoId}",
+      "qualitative_reasoning": "Write a detailed, step-by-step chain of thought here analyzing how the video constructs each of the specific expectation dimensions.",
       "expectationFormation": {
         "friendlyLocals": 0,
         "peacefulAtmosphere": 0,
@@ -119,60 +110,30 @@ async function scoreExpectationFormation(videoId, srtPath, descPath, icScores) {
       }
     }`;
 
-	const requestBody = {
-		model: MODEL_NAME,
-		messages: [
-			{
-				role: "system",
-				content: "You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.",
-			},
-			{ role: "user", content: promptInstructions }
-		],
-		temperature: 0.0,
-		top_p: 1.0,
-		top_k: 1,
-		seed: 42,
-		max_tokens: 8192,
-		stream: false,
-		response_format: { type: "json_object" },
-	};
-
-	return await sendEFRequest(requestBody, videoId, 1);
+	const systemPrompt =
+		"You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.";
+	return await sendEFRequest(systemPrompt, promptInstructions, videoId, 1);
 }
 
 /**
  * Sends the EF scoring request with retry logic.
  */
-async function sendEFRequest(requestBody, videoId, attempt) {
-	try {
-		console.log(`\n📋 ${attempt > 1 ? "(Retry) " : ""}Scoring Expectation Formation for ${videoId}...`);
+async function sendEFRequest(systemPrompt, userPrompt, videoId, attempt) {
+	console.log(`\n📋 ${attempt > 1 ? "(Retry) " : ""}Scoring Expectation Formation for ${videoId}...`);
 
-		const response = await axios.post(API_URL, requestBody, {
-			headers: { "Content-Type": "application/json" },
-			timeout: 0,
-		});
+	const result = await callLLM("scoreExpectationFormation", videoId, systemPrompt, userPrompt, true);
 
-		const message = response.data.choices[0]?.message;
-		const rawText = message?.content || "";
+	if (result) {
+		console.log(`\n✅ EF analysis complete.`);
+		return result.expectationFormation;
+	}
 
-		console.log(`\n✅ EF analysis complete. Parsing JSON...`);
-		logAPIInteraction("scoreExpectationFormation", videoId, requestBody, response.data);
-
-		const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-
-		if (!jsonMatch) {
-			if (attempt === 1) {
-				console.warn(`\n⚠️ Empty response from model. Retrying...`);
-				return await sendEFRequest(requestBody, videoId, 2);
-			}
-			throw new Error("Model did not return valid JSON after retry. Raw output: " + rawText);
-		}
-
-		const resultJson = JSON.parse(jsonMatch[0]);
-		return resultJson;
-	} catch (error) {
-		logAPIInteraction("scoreExpectationFormation", `${videoId}_attempt_${attempt}`, requestBody, error);
-		console.error(`\n❌ Error scoring EF for ${videoId}:\n`, error.message);
+	if (attempt < 3) {
+		console.log(`   ⏳ Retrying in 2 seconds (Attempt ${attempt + 1}/3)...`);
+		await new Promise((resolve) => setTimeout(resolve, 2000));
+		return await sendEFRequest(systemPrompt, userPrompt, videoId, attempt + 1);
+	} else {
+		console.error(`\n❌ Failed EF analysis for ${videoId} after 3 attempts.`);
 		return null;
 	}
 }

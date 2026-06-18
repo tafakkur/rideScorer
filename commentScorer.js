@@ -1,26 +1,9 @@
-const axios = require("axios");
-require("dotenv").config();
-
-const API_URL = process.env.API_URL;
-const MODEL_NAME = process.env.MODEL_NAME;
-
-if (!API_URL || !MODEL_NAME) {
-	console.error("❌ Missing API_URL or MODEL_NAME in .env file. Please set them before running.");
-	process.exit(1);
-}
+const { callLLM } = require("./llm");
 const { logAPIInteraction } = require("./logger");
 
 /**
  * Scores YouTube comments against the RIDE framework's Disconfirmation and
- * Conflict/Adaptation dimensions using a local LLM (LM Studio).
- *
- * @param {string} formattedComments - Pre-formatted comment text block from comment-parser.
- * @param {object} icScores - The video's existing Imaginary Construction scores.
- * @param {string} videoId - The video identifier.
- * @param {string} videoTitle - The video title for context.
- * @param {number} totalComments - Total comment count on the video.
- * @param {number} analyzedCount - Number of comments being analyzed.
- * @returns {object|null} - The comment analysis result, or null on failure.
+ * Conflict/Adaptation dimensions using a local LLM.
  */
 async function scoreComments(formattedComments, icScores, videoId, videoTitle, totalComments, analyzedCount) {
 	// Build the IC context string
@@ -71,6 +54,7 @@ async function scoreComments(formattedComments, icScores, videoId, videoTitle, t
     Match this schema exactly (filling scores and emotionalIntensity with integers 0-100):
     {
       "videoId": "${videoId}",
+      "qualitative_reasoning": "Write a detailed, step-by-step chain of thought here analyzing the comment discourse for disconfirmation, conflict, and adaptation.",
       "commentAnalysis": {
         "commentCount": ${analyzedCount},
         "disconfirmation": {
@@ -94,88 +78,45 @@ async function scoreComments(formattedComments, icScores, videoId, videoTitle, t
       }
     }`;
 
-	const requestBody = {
-		model: MODEL_NAME,
-		messages: [
-			{
-				role: "system",
-				content: "You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.",
-			},
-			{ role: "user", content: promptInstructions }
-		],
-		temperature: 0.0,
-		top_p: 1.0,
-		top_k: 1,
-		seed: 42,
-		max_tokens: 8192,
-		stream: false,
-		response_format: { type: "json_object" },
-	};
-
-	return await sendCommentRequest(requestBody, videoId, videoTitle, analyzedCount);
+	const systemPrompt =
+		"You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.";
+	return await sendCommentRequest(systemPrompt, promptInstructions, videoId, videoTitle, analyzedCount, 1);
 }
 
 /**
  * Sends the comment scoring request with retry logic.
- * If the model returns an empty response, retries once.
  */
-async function sendCommentRequest(requestBody, videoId, videoTitle, analyzedCount, attempt = 1) {
-	try {
-		console.log(`\n💬 ${attempt > 1 ? "(Retry) " : ""}Analyzing ${analyzedCount} comments for "${videoTitle}"...`);
+async function sendCommentRequest(systemPrompt, userPrompt, videoId, videoTitle, analyzedCount, attempt = 1) {
+	console.log(`\n💬 ${attempt > 1 ? "(Retry) " : ""}Analyzing ${analyzedCount} comments for "${videoTitle}"...`);
 
-		const response = await axios.post(API_URL, requestBody, {
-			headers: { "Content-Type": "application/json" },
-			timeout: 0,
-		});
+	const resultJson = await callLLM("scoreComments", `${videoId}_chunk_${attempt}`, systemPrompt, userPrompt, true);
 
-		const message = response.data.choices[0]?.message;
-		const rawText = message?.content || "";
-
-		console.log(`\n✅ Comment analysis complete. Parsing JSON...`);
-		logAPIInteraction("scoreComments", `${videoId}_chunk_${attempt}`, requestBody, response.data);
-
-		const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-
-		if (!jsonMatch) {
-			// Retry once if the model returned empty
-			if (attempt === 1) {
-				console.warn(`\n⚠️ Empty response from model. Retrying with shorter context...`);
-				return await sendCommentRequest(requestBody, videoId, videoTitle, analyzedCount, 2);
-			}
-			throw new Error("Model did not return valid JSON after retry. Raw output: " + rawText);
+	if (!resultJson) {
+		if (attempt === 1) {
+			console.warn(`\n⚠️ Empty/invalid response from model. Retrying with shorter context...`);
+			return await sendCommentRequest(systemPrompt, userPrompt, videoId, videoTitle, analyzedCount, 2);
 		}
-
-		const resultJson = JSON.parse(jsonMatch[0]);
-
-		// Normalize emotional_intensity → emotionalIntensity if the model used snake_case
-		if (resultJson.commentAnalysis?.sentiment) {
-			const s = resultJson.commentAnalysis.sentiment;
-			if (s.emotional_intensity !== undefined && s.emotionalIntensity === undefined) {
-				s.emotionalIntensity = s.emotional_intensity;
-				delete s.emotional_intensity;
-			}
-		}
-
-		return resultJson;
-	} catch (error) {
-		logAPIInteraction("scoreComments", `${videoId}_chunk_${attempt}`, requestBody, error);
-		console.error(`\n❌ Error analyzing comments for ${videoId}:\n`, error.message);
+		console.error(`\n❌ Failed to score comments for ${videoId} after retry.`);
 		return null;
 	}
+
+	// Normalize emotional_intensity → emotionalIntensity if the model used snake_case
+	if (resultJson.commentAnalysis?.sentiment) {
+		const s = resultJson.commentAnalysis.sentiment;
+		if (s.emotional_intensity !== undefined && s.emotionalIntensity === undefined) {
+			s.emotionalIntensity = s.emotional_intensity;
+			delete s.emotional_intensity;
+		}
+	}
+
+	return resultJson;
 }
 
 /**
  * Sends combined chunk rationales to the LLM for synthesis into a single concise summary.
- *
- * @param {string[]} blockRationales - Array of rationale strings from each chunk.
- * @param {string} videoId - The video identifier.
- * @param {object} aggregatedScores - The averaged scores for context.
- * @returns {string} - A concise 2-4 sentence synthesized rationale.
  */
 async function synthesizeRationale(blockRationales, videoId, aggregatedScores) {
-	const combinedText = blockRationales
-		.map((r, i) => `[Block ${i + 1}] ${r}`)
-		.join("\n");
+	const combinedText = blockRationales.map((r, i) => `[Block ${i + 1}] ${r}`).join("\n");
 
 	const prompt = `
 You are synthesizing comment analysis results from ${blockRationales.length} chunks of YouTube comments for video ${videoId}.
@@ -196,59 +137,20 @@ Do NOT list each block. Synthesize into one cohesive summary.
 
 Respond with ONLY the rationale text, no JSON, no labels, no prefixes.`;
 
-	try {
-		const response = await axios.post(
-			API_URL,
-			{
-				model: MODEL_NAME,
-				messages: [
-					{
-						role: "system",
-						content: "You are an expert qualitative researcher. Return ONLY the plain text summary. Do NOT return JSON or tool calls."
-					},
-					{ role: "user", content: prompt }
-				],
-				temperature: 0.0,
-				top_p: 1.0,
-				top_k: 1,
-				seed: 42,
-				max_tokens: 8192,
-				stream: false,
-			},
-			{
-				headers: { "Content-Type": "application/json" },
-				timeout: 0,
-			}
-		);
+	const systemPrompt = "You are an expert qualitative researcher. Return ONLY the plain text summary. Do NOT return JSON or tool calls.";
+	const rationaleText = await callLLM("synthesizeRationale", videoId, systemPrompt, prompt, false);
 
-		const message = response.data.choices[0]?.message;
-		const rawText = (message?.content || "").trim();
-		logAPIInteraction("synthesizeRationale", videoId, { chunksCount: blockRationales.length }, response.data);
-
-		if (rawText && rawText.length > 10) {
-			console.log(`   ✅ Rationale synthesized (${rawText.length} chars from ${combinedText.length} chars)`);
-			return rawText;
-		}
-	} catch (error) {
-		logAPIInteraction("synthesizeRationale", videoId, {}, error);
-		console.warn(`   ⚠️ Rationale synthesis failed, falling back to best-chunk rationale`);
+	if (rationaleText && rationaleText.length > 10) {
+		console.log(`   ✅ Rationale synthesized (${rationaleText.length} chars)`);
+		return rationaleText;
 	}
 
-	// Fallback: return rationale from first block
+	console.warn(`   ⚠️ Rationale synthesis failed, falling back to best-chunk rationale`);
 	return blockRationales[0] || "No rationale available.";
 }
 
 /**
  * Aggregates multiple chunk-level comment analysis results into one combined result.
- * - Numeric scores: averaged and rounded to nearest integer
- * - Sentiment polarity: majority vote
- * - Representative quotes: kept from chunk with highest disconfirmation score
- * - Rationale: synthesized into a concise summary via LLM
- *
- * @param {object[]} chunkResults - Array of scoreComments() results (non-null).
- * @param {string} videoId - The video identifier.
- * @param {number} totalAnalyzed - Total comments across all chunks.
- * @returns {object} - Combined commentAnalysis object.
  */
 async function aggregateChunkResults(chunkResults, videoId, totalAnalyzed) {
 	const analyses = chunkResults.map((r) => r?.commentAnalysis).filter((a) => a);
@@ -309,4 +211,3 @@ async function aggregateChunkResults(chunkResults, videoId, totalAnalyzed) {
 }
 
 module.exports = { scoreComments, aggregateChunkResults };
-

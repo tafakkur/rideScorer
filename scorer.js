@@ -1,17 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const axios = require("axios");
-require("dotenv").config();
-
-const API_URL = process.env.API_URL;
-const MODEL_NAME = process.env.MODEL_NAME;
-
-if (!API_URL || !MODEL_NAME) {
-	console.error("❌ Missing API_URL or MODEL_NAME in .env file. Please set them before running.");
-	process.exit(1);
-}
-
-const { logAPIInteraction } = require("./logger");
+const { callLLM } = require("./llm");
 
 function cleanTranscript(srtPath) {
 	if (!fs.existsSync(srtPath)) return "";
@@ -61,49 +50,27 @@ function saveFrameData(videoId, frameName, caption, responseData) {
 }
 
 async function describeSingleFrame(filePath, videoId) {
-	const requestBody = {
-		model: MODEL_NAME,
-		messages: [
-			{
-				role: "user",
-				content: [
-					{
-						type: "text",
-						text: "Briefly describe the visual aesthetic and setting of this single travel video frame in one sentence. Focus on lighting, scenery, and subjects.",
-					},
-					{ type: "image_url", image_url: { url: fileToDataUrl(filePath) } },
-				],
-			},
-		],
-		temperature: 0.0,
-		top_p: 1.0,
-		top_k: 1,
-		seed: 42,
-		max_tokens: 8192,
-	};
-
 	const frameName = path.basename(filePath);
+	const systemPrompt =
+		"You are an expert qualitative researcher returning ONLY the final string description. Do NOT return a tool call or function call object.";
 
-	try {
-		const response = await axios.post(API_URL, requestBody, {
-			headers: { "Content-Type": "application/json" },
-			timeout: 0,
-		});
-		const msg = response.data.choices[0].message;
-		const text = (msg.content && msg.content.trim()) || "";
-		logAPIInteraction("describeFrame", frameName, requestBody, response.data);
+	const userPromptArray = [
+		{
+			type: "text",
+			text: "Briefly describe the visual aesthetic and setting of this single travel video frame in one sentence. Focus on lighting, scenery, and subjects.",
+		},
+		{ type: "image_url", image_url: { url: fileToDataUrl(filePath) } },
+	];
 
-		const caption = text || "Visual data missing for this frame.";
+	process.stdout.write(`   ➔ Captioning frame ${frameName}... `);
+	const caption = await callLLM("describeFrame", frameName, systemPrompt, userPromptArray, false);
 
-		// Save individual frame data for model comparison
+	if (caption) {
 		if (videoId) {
-			saveFrameData(videoId, frameName, caption, response.data);
+			saveFrameData(videoId, frameName, caption, { content: caption });
 		}
-
 		return caption;
-	} catch (error) {
-		logAPIInteraction("describeFrame", frameName, requestBody, error);
-		console.error(`⚠️ Failed to describe frame:`, error.message);
+	} else {
 		return "Visual data missing for this frame.";
 	}
 }
@@ -118,7 +85,6 @@ async function scoreVideoAesthetics(framePaths, srtPath, descPath, videoId) {
 	const visualCaptions = [];
 
 	for (let i = 0; i < sampledFrames.length; i++) {
-		process.stdout.write(`   ➔ Captioning frame ${i + 1}/${sampledFrames.length}... `);
 		const caption = await describeSingleFrame(sampledFrames[i], videoId);
 		visualCaptions.push(`Frame ${i + 1}: ${caption}`);
 		console.log("Done.");
@@ -153,6 +119,7 @@ async function scoreVideoAesthetics(framePaths, srtPath, descPath, videoId) {
     CRITICAL: You must respond ONLY with a valid JSON object. Do not include any markdown formatting, backticks, or introductory text. Match this schema exactly (filling scores with integers 0-100):
     {
       "videoId": "${videoId}",
+      "qualitative_reasoning": "Write a detailed, step-by-step chain of thought here analyzing how the visual cues and transcript interact to create the destination imaginary.",
       "scores": {
         "authenticity": 0,
         "escape": 0,
@@ -164,44 +131,15 @@ async function scoreVideoAesthetics(framePaths, srtPath, descPath, videoId) {
       "rationale": "A brief 2-sentence qualitative summary detailing how the visual and linguistic cues interact."
     }`;
 
-	const requestBody = {
-		model: MODEL_NAME,
-		messages: [
-			{
-				role: "system",
-				content: "You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.",
-			},
-			{ role: "user", content: promptInstructions }
-		],
-		temperature: 0.0,
-		top_p: 1.0,
-		top_k: 1,
-		seed: 42,
-		max_tokens: 8192,
-		stream: false,
-		response_format: { type: "json_object" },
-	};
+	const systemPrompt =
+		"You are an expert qualitative researcher returning ONLY valid JSON. Do NOT return a tool call or function call object. Perform the analysis yourself.";
+	const result = await callLLM("scoreVideoAesthetics", videoId, systemPrompt, promptInstructions, true);
 
-	try {
-		const response = await axios.post(API_URL, requestBody, {
-			headers: { "Content-Type": "application/json" },
-			timeout: 0,
-		});
-
-		const message = response.data.choices[0]?.message;
-		const rawText = message?.content || "";
-
-		console.log(`\n✅ Video analysis complete. Parsing JSON...`);
-		logAPIInteraction("scoreVideoAesthetics", videoId, requestBody, response.data);
-
-		const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) throw new Error("Model did not return JSON. Raw output: " + rawText);
-
-		const resultJson = JSON.parse(jsonMatch[0]);
-		return resultJson;
-	} catch (error) {
-		logAPIInteraction("scoreVideoAesthetics", videoId, requestBody, error);
-		console.error(`\n❌ Error synthesizing final score for ${videoId}:\n`, error.message);
+	if (result) {
+		console.log(`\n✅ Aesthetic scoring complete.`);
+		return result.scores;
+	} else {
+		console.error(`\n❌ Error synthesizing final score for ${videoId}`);
 		return null;
 	}
 }
