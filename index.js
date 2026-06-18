@@ -59,7 +59,8 @@ function getTrackerState(videoId, videoFiles, commentIndex, scoresMap) {
 	const efProcessed = entry && entry.expectationFormation != null ? "true" : "false";
 	const commentsProcessed = entry && entry.commentAnalysis != null ? "true" : "false";
 	const conflictProcessed = entry && entry.conflictAnalysis != null ? "true" : "false";
-	const finalDatasetGenerated = framesProcessed === "true" && efProcessed === "true" && commentsProcessed === "true" && conflictProcessed === "true" ? "true" : "false";
+	const finalDatasetGenerated =
+		framesProcessed === "true" && efProcessed === "true" && commentsProcessed === "true" && conflictProcessed === "true" ? "true" : "false";
 
 	return {
 		videoId,
@@ -189,7 +190,7 @@ function saveScores(scoresMap) {
 		"commentRationale",
 		"hasConflict",
 		"conflictIntensity",
-		"conflictRationale"
+		"conflictRationale",
 	].join(",");
 
 	const csvRows = arr.map((entry) => {
@@ -235,7 +236,7 @@ function saveScores(scoresMap) {
 			ca.rationale || "",
 			entry.conflictAnalysis?.hasConflict ?? "",
 			entry.conflictAnalysis?.conflictIntensity ?? "",
-			entry.conflictAnalysis?.rationale || ""
+			entry.conflictAnalysis?.rationale || "",
 		]
 			.map(csvEscape)
 			.join(",");
@@ -254,11 +255,15 @@ function ensureDownloads() {
 	if (!fs.existsSync("YouTubeURLs.txt")) return;
 
 	// Ensure all base directories exist before checking/downloading
-	[VIDEOS_DIR, SUBTITLES_DIR, DESCRIPTIONS_DIR, TEMP_FRAMES_DIR, COMMENTS_DIR].forEach(dir => {
+	[VIDEOS_DIR, SUBTITLES_DIR, DESCRIPTIONS_DIR, TEMP_FRAMES_DIR, COMMENTS_DIR].forEach((dir) => {
 		if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 	});
 
-	const urlList = fs.readFileSync("YouTubeURLs.txt", "utf8").split("\n").map(u => u.trim()).filter(Boolean);
+	const urlList = fs
+		.readFileSync("YouTubeURLs.txt", "utf8")
+		.split("\n")
+		.map((u) => u.trim())
+		.filter(Boolean);
 
 	let hasHeader = false;
 	if (fs.existsSync(VIDEO_MAP)) {
@@ -266,7 +271,23 @@ function ensureDownloads() {
 	}
 
 	if (!hasHeader) {
-		const CSV_HEADER = ["video_id", "url", "title", "upload_date", "download_date", "view_count", "like_count", "comment_count", "channel", "channel_followers", "channel_verified", "language", "category", "duration", "description"].join(",");
+		const CSV_HEADER = [
+			"video_id",
+			"url",
+			"title",
+			"upload_date",
+			"download_date",
+			"view_count",
+			"like_count",
+			"comment_count",
+			"channel",
+			"channel_followers",
+			"channel_verified",
+			"language",
+			"category",
+			"duration",
+			"description",
+		].join(",");
 		fs.writeFileSync(VIDEO_MAP, CSV_HEADER + "\n");
 	}
 
@@ -276,7 +297,7 @@ function ensureDownloads() {
 		if (!ytId) continue;
 
 		// Check if downloaded
-		const videoExists = fs.readdirSync(VIDEOS_DIR).some(f => f.startsWith(ytId));
+		const videoExists = fs.readdirSync(VIDEOS_DIR).some((f) => f.startsWith(ytId));
 		const commentExists = fs.existsSync(path.join(COMMENTS_DIR, `${ytId}.info.json`));
 
 		if (videoExists && commentExists) {
@@ -286,7 +307,7 @@ function ensureDownloads() {
 		console.log(`\n⬇️  Downloading missing files for: ${url} (ID: ${ytId})`);
 
 		if (!videoExists) {
-			const mediaCmd = `yt-dlp -f "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_FRAMES_DIR}/../temp_download/%(id)s.%(ext)s" "${url}"`;
+			const mediaCmd = `yt-dlp --js-runtimes node -f "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_FRAMES_DIR}/../temp_download/%(id)s.%(ext)s" "${url}"`;
 			try {
 				const tempDir = path.join(__dirname, "temp_download");
 				if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
@@ -303,7 +324,9 @@ function ensureDownloads() {
 						} else if (file.endsWith(".description") || file.endsWith(".txt")) {
 							fs.renameSync(srcPath, path.join(DESCRIPTIONS_DIR, file));
 						} else {
-							try { fs.unlinkSync(srcPath); } catch (e) {}
+							try {
+								fs.unlinkSync(srcPath);
+							} catch (e) {}
 						}
 					}
 				}
@@ -314,7 +337,7 @@ function ensureDownloads() {
 		}
 
 		if (!commentExists) {
-			const commentCmd = `yt-dlp --write-comments --skip-download -o "${COMMENTS_DIR}/%(id)s.%(ext)s" "${url}"`;
+			const commentCmd = `yt-dlp --js-runtimes node --write-comments --skip-download -o "${COMMENTS_DIR}/%(id)s.%(ext)s" "${url}"`;
 			try {
 				execSync(commentCmd, { stdio: "inherit" });
 				console.log(`✅ Comments downloaded.`);
@@ -349,7 +372,7 @@ function ensureDownloads() {
 					data.language || "",
 					csvEscape((data.categories && data.categories[0]) || ""),
 					data.duration_string || "",
-					csvEscape(description)
+					csvEscape(description),
 				].join(",");
 				fs.appendFileSync(VIDEO_MAP, row + "\n");
 				console.log(`📋 Added to videoMap.csv: ${ytId} — ${title}`);
@@ -391,7 +414,7 @@ async function processAllVideos(freshMode) {
 			rationale: null,
 			expectationFormation: null,
 			commentAnalysis: null,
-			conflictAnalysis: null
+			conflictAnalysis: null,
 		};
 		scoresMap.set(videoId, currentEntry);
 
@@ -411,14 +434,17 @@ async function processAllVideos(freshMode) {
 			try {
 				let frames = [];
 				const tempDir = path.join(TEMP_FRAMES_DIR, videoId);
-				const framesExist = fs.existsSync(tempDir) && fs.readdirSync(tempDir).some(f => f.endsWith(".jpg") || f.endsWith(".jpeg"));
+				const framesExist = fs.existsSync(tempDir) && fs.readdirSync(tempDir).some((f) => f.endsWith(".jpg") || f.endsWith(".jpeg"));
 
 				if (!framesExist) {
 					console.log(`      ➔ Extracting frames...`);
 					frames = await extractFrames(videoPath, outputDir);
 				} else {
 					console.log(`      ⏩ Frames already exist — skipping extraction`);
-					frames = fs.readdirSync(tempDir).filter(f => f.endsWith(".jpg") || f.endsWith(".jpeg")).map(f => path.join(tempDir, f));
+					frames = fs
+						.readdirSync(tempDir)
+						.filter((f) => f.endsWith(".jpg") || f.endsWith(".jpeg"))
+						.map((f) => path.join(tempDir, f));
 				}
 
 				if (frames.length > 0) {
@@ -546,11 +572,9 @@ function askQuestion(query) {
 async function run() {
 	console.log("\n=== RIDE Scorer Pipeline ===");
 
-	const startAnswer = await askQuestion(
-		"Do you want to continue processing from last point or start fresh? (continue/fresh) [default: continue]: "
-	);
+	const startAnswer = await askQuestion("Do you want to continue processing from last point or start fresh? (continue/fresh) [default: continue]: ");
 	const startChoice = startAnswer.trim().toLowerCase();
-	const freshMode = (startChoice === "fresh" || startChoice === "f");
+	const freshMode = startChoice === "fresh" || startChoice === "f";
 
 	if (freshMode) {
 		console.log("\n🧹 Starting fresh. Clearing existing dataset files...");
