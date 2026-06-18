@@ -21,7 +21,7 @@ function extractFrames(videoPath, outputDir) {
 
 		// Get video duration to estimate total frames
 		ffmpeg.ffprobe(videoPath, (err, metadata) => {
-			const interval = 30; // 1 frame every 30 seconds
+			const interval = 10; // 1 frame every 10 seconds
 			if (err) {
 				console.warn("⚠️ ffprobe failed. Proceeding without duration check:", err.message);
 				runFFmpeg(videoPath, outputDir, interval, null, resolve, reject);
