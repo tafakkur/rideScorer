@@ -307,7 +307,7 @@ function ensureDownloads() {
 		console.log(`\n⬇️  Downloading missing files for: ${url} (ID: ${ytId})`);
 
 		if (!videoExists) {
-			const mediaCmd = `yt-dlp --js-runtimes node -f "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_FRAMES_DIR}/../temp_download/%(id)s.%(ext)s" "${url}"`;
+			const mediaCmd = `yt-dlp --js-runtimes node -f "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_FRAMES_DIR}/../temp_download/%(id)s.%(ext)s" "${url}"`;
 			try {
 				const tempDir = path.join(__dirname, "temp_download");
 				if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
