@@ -152,7 +152,7 @@ function downloadAll(url) {
 	console.log(`\n⬇️  Processing: ${url} (ID: ${ytId})`);
 
 	// --- Stage 1: Video + Subs + Description (downloads to temp folder) ---
-	const mediaCmd = `yt-dlp -f "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_DOWNLOAD_DIR}/%(id)s.%(ext)s" ${url}`;
+	const mediaCmd = `yt-dlp --js-runtimes node -f "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][vcodec^=avc1]/best" --write-description --write-auto-subs --write-subs --sub-langs en --convert-subs srt -o "${TEMP_DOWNLOAD_DIR}/%(id)s.%(ext)s" ${url}`;
 
 	try {
 		execSync(mediaCmd, { stdio: "inherit" });
@@ -163,7 +163,7 @@ function downloadAll(url) {
 	}
 
 	// --- Stage 2: Comments ---
-	const commentCmd = `yt-dlp --write-comments --skip-download -o "${COMMENTS_DIR}/%(id)s.%(ext)s" ${url}`;
+	const commentCmd = `yt-dlp --js-runtimes node --write-comments --skip-download -o "${COMMENTS_DIR}/%(id)s.%(ext)s" ${url}`;
 
 	try {
 		execSync(commentCmd, { stdio: "inherit" });
