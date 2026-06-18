@@ -1,0 +1,24 @@
+{
+	"name": "ride-scorer",
+	"version": "1.0.0",
+	"description": "Qualitative tourism destination imaginaries pipeline using RIDE framework and LLM scoring",
+	"main": "index.js",
+	"scripts": {
+		"start": "node index.js",
+		"test-api": "node test-api-format.js"
+	},
+	"keywords": [
+		"tourism",
+		"ride-framework",
+		"youtube",
+		"llm",
+		"qualitative-analysis"
+	],
+	"author": "",
+	"license": "ISC",
+	"dependencies": {
+		"axios": "^1.17.0",
+		"dotenv": "^17.4.2",
+		"fluent-ffmpeg": "2.1.2"
+	}
+}
